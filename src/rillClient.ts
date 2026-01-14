@@ -35,6 +35,7 @@ export class RillClient {
 
   /**
    * Retry with exponential backoff
+   * Handles rate limiting (429) with longer backoff
    */
   private async retryWithBackoff<T>(
     fn: () => Promise<T>,
@@ -57,8 +58,14 @@ export class RillClient {
           throw lastError;
         }
         if (attempt < maxRetries - 1) {
-          const delay = baseDelay * Math.pow(2, attempt);
-          console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          // Use longer backoff for rate limiting (429)
+          const isRateLimit = lastError.message.includes('429') || 
+                             lastError.message.includes('rate limit') ||
+                             lastError.message.includes('too many requests');
+          const delay = isRateLimit 
+            ? baseDelay * Math.pow(2, attempt + 2) // Longer backoff for rate limits
+            : baseDelay * Math.pow(2, attempt);
+          console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms${isRateLimit ? ' (rate limited)' : ''}`);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -67,23 +74,37 @@ export class RillClient {
   }
 
   /**
+   * Check if Rill CLI is available
+   */
+  async checkRillCliAvailable(): Promise<boolean> {
+    try {
+      await execAsync('rill --version', { timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Execute a Rill CLI command and return the result
-   * Uses environment variable for API token to avoid exposing it in process list
+   * Note: Rill CLI requires --api-token flag, but we escape it properly to prevent injection
    */
   private async executeCommand(
     command: string,
     ignoreErrors = false,
     timeout = 30000
   ): Promise<string> {
-    // Use environment variable instead of command line argument for security
-    const fullCommand = `rill ${command} --format json`;
+    // Rill CLI requires --api-token flag. We escape the token to prevent injection.
+    // The token is validated to only contain safe characters in the constructor.
+    const escapedToken = this.escapeShellArg(this.apiToken);
+    const fullCommand = `rill ${command} --api-token ${escapedToken} --format json`;
     
     try {
       const { stdout, stderr } = await this.retryWithBackoff(async () => {
         return await execAsync(fullCommand, {
           env: {
             ...process.env,
-            RILL_API_TOKEN: this.apiToken,
+            RILL_API_TOKEN: this.apiToken, // Also set env var in case CLI supports it
           },
           maxBuffer: 10 * 1024 * 1024, // 10MB buffer
           timeout,
