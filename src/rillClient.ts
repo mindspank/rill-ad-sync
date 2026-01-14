@@ -18,14 +18,19 @@ export class RillClient {
 
   /**
    * Escape shell arguments to prevent command injection
+   * Uses proper shell escaping for safe command execution
    */
   private escapeShellArg(arg: string): string {
-    // Remove any characters that could be used for command injection
-    if (!/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(arg)) {
-      throw new Error(`Invalid input format: ${arg}`);
+    if (!arg || typeof arg !== 'string') {
+      throw new Error('Invalid argument: must be a non-empty string');
     }
-    // For email addresses, we can be more permissive but still escape quotes
-    return `"${arg.replace(/"/g, '\\"')}"`;
+    // Remove any characters that could be used for command injection
+    // Allow alphanumeric, dots, dashes, underscores, @ for emails, and spaces
+    if (!/^[a-zA-Z0-9._@\s-]+$/.test(arg)) {
+      throw new Error(`Invalid input format - contains unsafe characters: ${arg}`);
+    }
+    // Escape quotes and wrap in quotes
+    return `"${arg.replace(/"/g, '\\"').replace(/\$/g, '\\$')}"`;
   }
 
   /**
