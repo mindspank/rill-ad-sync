@@ -62,6 +62,7 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     errors: [],
   };
 
+  const syncStartTime = Date.now();
   try {
     // Initialize clients
     const adClient = new AdClient(
@@ -128,7 +129,6 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
 
     // Create new users in Rill with rate limiting (sequential to avoid overwhelming the API)
     console.log(`Creating ${usersToCreate.length} new users in Rill`);
-    const syncStartTime = Date.now();
     const createStartTime = Date.now();
     for (let i = 0; i < usersToCreate.length; i++) {
       const email = usersToCreate[i];
