@@ -48,10 +48,12 @@ export class AdClient {
 
     try {
       const escapedGroupName = this.escapeODataString(groupName.trim());
-      const response = await this.client
-        .api('/groups')
-        .filter(`displayName eq '${escapedGroupName}'`)
-        .get();
+      const response = await this.retryWithBackoff(async () => {
+        return await this.client
+          .api('/groups')
+          .filter(`displayName eq '${escapedGroupName}'`)
+          .get();
+      });
 
       const groups: GraphApiResponse<GraphApiGroup> = response;
       
@@ -75,10 +77,43 @@ export class AdClient {
   }
 
   /**
+   * Retry with exponential backoff
+   */
+  private async retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    maxRetries = 3,
+    baseDelay = 1000
+  ): Promise<T> {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        // Don't retry on authentication errors or not found errors
+        if (
+          lastError.message.includes('401') ||
+          lastError.message.includes('403') ||
+          lastError.message.includes('404') ||
+          lastError.message.includes('not found')
+        ) {
+          throw lastError;
+        }
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt);
+          console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError || new Error('Retry failed');
+  }
+
+  /**
    * Get all users in a group by group ID
    */
   async getGroupMembers(groupId: string): Promise<string[]> {
-    const userEmails: string[] = [];
+    const userEmailsSet = new Set<string>();
     let nextLink: string | undefined;
 
     try {
@@ -87,8 +122,10 @@ export class AdClient {
           ? nextLink.replace('https://graph.microsoft.com/v1.0', '')
           : `/groups/${groupId}/members`;
 
-        const response = await this.client.api(endpoint).get();
-        const data: GraphApiResponse<GraphApiUser> = response;
+        const data = await this.retryWithBackoff(async () => {
+          const response = await this.client.api(endpoint).get();
+          return response as GraphApiResponse<GraphApiUser>;
+        });
 
         // Filter for user objects only (not groups or other directory objects)
         const users = data.value.filter(
@@ -100,15 +137,15 @@ export class AdClient {
         // Extract email addresses (normalize to lowercase for consistent comparison)
         for (const user of users) {
           const email = (user.userPrincipalName || user.mail)?.toLowerCase().trim();
-          if (email && this.isValidEmail(email) && !userEmails.includes(email)) {
-            userEmails.push(email);
+          if (email && this.isValidEmail(email)) {
+            userEmailsSet.add(email);
           }
         }
 
         nextLink = data['@odata.nextLink'];
       } while (nextLink);
 
-      return userEmails;
+      return Array.from(userEmailsSet);
     } catch (error) {
       console.error('Error fetching group members:', error);
       throw new Error(

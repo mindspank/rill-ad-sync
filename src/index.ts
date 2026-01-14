@@ -20,23 +20,35 @@ function getEnvConfig(): EnvConfig {
     'RILL_GROUP_NAME',
   ];
 
-  const missing = requiredVars.filter((varName) => !process.env[varName]);
+  const missing = requiredVars.filter(
+    (varName) => !process.env[varName] || process.env[varName]!.trim().length === 0
+  );
 
   if (missing.length > 0) {
     throw new Error(
-      `Missing required environment variables: ${missing.join(', ')}`
+      `Missing or empty required environment variables: ${missing.join(', ')}`
     );
   }
 
-  return {
-    adTenantId: process.env.AD_TENANT_ID!,
-    adClientId: process.env.AD_CLIENT_ID!,
-    adClientSecret: process.env.AD_CLIENT_SECRET!,
-    adGroupName: process.env.AD_GROUP_NAME!,
-    rillApiToken: process.env.RILL_API_TOKEN!,
-    rillGroupName: process.env.RILL_GROUP_NAME!,
-    rillOrgName: process.env.RILL_ORG_NAME,
+  const config = {
+    adTenantId: process.env.AD_TENANT_ID!.trim(),
+    adClientId: process.env.AD_CLIENT_ID!.trim(),
+    adClientSecret: process.env.AD_CLIENT_SECRET!.trim(),
+    adGroupName: process.env.AD_GROUP_NAME!.trim(),
+    rillApiToken: process.env.RILL_API_TOKEN!.trim(),
+    rillGroupName: process.env.RILL_GROUP_NAME!.trim(),
+    rillOrgName: process.env.RILL_ORG_NAME?.trim(),
   };
+
+  // Validate that critical values are not just whitespace
+  if (!config.adTenantId || !config.adClientId || !config.adClientSecret) {
+    throw new Error('AD credentials cannot be empty');
+  }
+  if (!config.rillApiToken) {
+    throw new Error('RILL_API_TOKEN cannot be empty');
+  }
+
+  return config;
 }
 
 /**
@@ -99,21 +111,25 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     // so we'll try to add all AD users and let Rill CLI handle "already in group" gracefully
     const usersToAddToGroup = normalizedAdUsers;
 
-    // Create new users in Rill
+    // Create new users in Rill with rate limiting (sequential to avoid overwhelming the API)
     console.log(`Creating ${usersToCreate.length} new users in Rill`);
     for (const email of usersToCreate) {
       try {
         await rillClient.createUser(email, 'viewer');
         result.usersCreated++;
+        console.log(`✓ Created user: ${email}`);
       } catch (error) {
         const errorMsg = `Failed to create user ${email}: ${error instanceof Error ? error.message : 'Unknown error'}`;
-        console.error(errorMsg);
+        console.error(`✗ ${errorMsg}`);
         result.errors.push(errorMsg);
         result.success = false;
+        // Continue with other users even if one fails
       }
+      // Small delay to avoid rate limiting (50ms between requests)
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
-    // Add all AD users to the Rill group (idempotent operation)
+    // Add all AD users to the Rill group (idempotent operation) with rate limiting
     console.log(
       `Adding ${normalizedAdUsers.length} users to Rill group: ${config.rillGroupName}`
     );
@@ -123,13 +139,19 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
         // Only count if it was a new addition (not already in group)
         if (!rillGroupUsersSet.has(email)) {
           result.usersAddedToGroup++;
+          console.log(`✓ Added user ${email} to group`);
+        } else {
+          console.log(`- User ${email} already in group, skipped`);
         }
       } catch (error) {
         const errorMsg = `Failed to add user ${email} to group: ${error instanceof Error ? error.message : 'Unknown error'}`;
-        console.error(errorMsg);
+        console.error(`✗ ${errorMsg}`);
         result.errors.push(errorMsg);
         result.success = false;
+        // Continue with other users even if one fails
       }
+      // Small delay to avoid rate limiting (50ms between requests)
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     console.log('Sync completed successfully');

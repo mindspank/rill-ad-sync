@@ -34,23 +34,60 @@ export class RillClient {
   }
 
   /**
+   * Retry with exponential backoff
+   */
+  private async retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    maxRetries = 3,
+    baseDelay = 1000
+  ): Promise<T> {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        // Don't retry on authentication errors or validation errors
+        if (
+          lastError.message.includes('401') ||
+          lastError.message.includes('403') ||
+          lastError.message.includes('Invalid') ||
+          lastError.message.includes('not found')
+        ) {
+          throw lastError;
+        }
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt);
+          console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError || new Error('Retry failed');
+  }
+
+  /**
    * Execute a Rill CLI command and return the result
+   * Uses environment variable for API token to avoid exposing it in process list
    */
   private async executeCommand(
     command: string,
     ignoreErrors = false,
     timeout = 30000
   ): Promise<string> {
-    const fullCommand = `rill ${command} --api-token ${this.apiToken} --format json`;
+    // Use environment variable instead of command line argument for security
+    const fullCommand = `rill ${command} --format json`;
     
     try {
-      const { stdout, stderr } = await execAsync(fullCommand, {
-        env: {
-          ...process.env,
-          RILL_API_TOKEN: this.apiToken,
-        },
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        timeout,
+      const { stdout, stderr } = await this.retryWithBackoff(async () => {
+        return await execAsync(fullCommand, {
+          env: {
+            ...process.env,
+            RILL_API_TOKEN: this.apiToken,
+          },
+          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+          timeout,
+        });
       });
 
       if (stderr && !ignoreErrors) {
