@@ -210,7 +210,7 @@ async function installRillCLI() {
             RILL_VERSION === 'latest'
                 ? await getLatestVersion()
                 : RILL_VERSION.replace(/^v/, ''); // Remove leading 'v' if present
-        
+
         version = validateVersion(version);
 
         console.log(`Installing Rill CLI ${version} for ${platform}`);
@@ -265,7 +265,7 @@ async function installRillCLI() {
             // Escape paths to prevent injection
             const escapedZipPath = zipPath.replace(/"/g, '\\"');
             const escapedTempDir = tempDir.replace(/"/g, '\\"');
-            execSync(`unzip -q "${escapedZipPath}" -d "${escapedTempDir}"`, { 
+            execSync(`unzip -q "${escapedZipPath}" -d "${escapedTempDir}"`, {
                 stdio: 'inherit',
                 maxBuffer: 10 * 1024 * 1024 // 10MB
             });
@@ -310,7 +310,7 @@ async function installRillCLI() {
         // Check if binary already exists and is the same version
         if (fs.existsSync(targetPath)) {
             try {
-                const existingVersion = execSync(`"${targetPath}" version`, { 
+                const existingVersion = execSync(`"${targetPath}" version`, {
                     encoding: 'utf8',
                     timeout: 5000
                 }).trim();
@@ -325,7 +325,7 @@ async function installRillCLI() {
         try {
             const escapedBinaryPath = binaryPath.replace(/"/g, '\\"');
             const escapedTargetPath = targetPath.replace(/"/g, '\\"');
-            execSync(`install "${escapedBinaryPath}" "${escapedTargetPath}"`, { 
+            execSync(`install "${escapedBinaryPath}" "${escapedTargetPath}"`, {
                 stdio: 'inherit',
                 timeout: 10000
             });
@@ -341,7 +341,7 @@ async function installRillCLI() {
         // Test the installed binary
         try {
             const escapedTargetPath = targetPath.replace(/"/g, '\\"');
-            const versionOutput = execSync(`"${escapedTargetPath}" version`, { 
+            const versionOutput = execSync(`"${escapedTargetPath}" version`, {
                 encoding: 'utf8',
                 timeout: 5000
             });

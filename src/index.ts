@@ -6,6 +6,7 @@ import { Request, Response } from '@google-cloud/functions-framework';
 import { AdClient } from './adClient';
 import { RillClient } from './rillClient';
 import { EnvConfig, SyncResult } from './types';
+import * as logger from './logger';
 
 /**
  * Validate and load environment variables
@@ -82,9 +83,9 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     }
 
     // Fetch users from AD group
-    console.log(`Fetching users from AD group: ${config.adGroupName}`);
+    logger.logInfo('Fetching users from AD group', { adGroupName: config.adGroupName });
     const adUsers = await adClient.getUsersInGroup(config.adGroupName);
-    console.log(`Found ${adUsers.length} users in AD group`);
+    logger.logInfo('Found users in AD group', { count: adUsers.length });
 
     // Validate group size to prevent timeouts
     const MAX_GROUP_SIZE = 10000;
@@ -99,11 +100,11 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     const normalizedAdUsers = adUsers.map((email) => email.toLowerCase().trim());
 
     // Fetch users from Rill group
-    console.log(`Fetching users from Rill group: ${config.rillGroupName}`);
+    logger.logInfo('Fetching users from Rill group', { rillGroupName: config.rillGroupName });
     let rillGroupUsers: string[] = [];
     try {
       rillGroupUsers = await rillClient.listGroupMembers(config.rillGroupName);
-      console.log(`Found ${rillGroupUsers.length} users in Rill group`);
+      logger.logInfo('Found users in Rill group', { count: rillGroupUsers.length });
     } catch (error: any) {
       // If group doesn't exist, that's a critical error
       if (error.message && error.message.includes('does not exist')) {
@@ -128,18 +129,23 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     const usersToAddToGroup = normalizedAdUsers;
 
     // Create new users in Rill with rate limiting (sequential to avoid overwhelming the API)
-    console.log(`Creating ${usersToCreate.length} new users in Rill`);
+    logger.logInfo('Creating new users in Rill', { count: usersToCreate.length });
     const createStartTime = Date.now();
     for (let i = 0; i < usersToCreate.length; i++) {
       const email = usersToCreate[i];
-      const progress = `[${i + 1}/${usersToCreate.length}]`;
       try {
         await rillClient.createUser(email, 'viewer');
         result.usersCreated++;
-        console.log(`${progress} ✓ Created user: ${email}`);
+        logger.logInfo('Created user', { 
+          email, 
+          progress: `${i + 1}/${usersToCreate.length}` 
+        });
       } catch (error) {
         const errorMsg = `Failed to create user ${email}: ${error instanceof Error ? error.message : 'Unknown error'}`;
-        console.error(`${progress} ✗ ${errorMsg}`);
+        logger.logError('Failed to create user', error, { 
+          email, 
+          progress: `${i + 1}/${usersToCreate.length}` 
+        });
         result.errors.push(errorMsg);
         // Don't mark as failure if it's just "already exists" - that's expected
         if (!errorMsg.includes('already exists')) {
@@ -151,31 +157,40 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     const createDuration = ((Date.now() - createStartTime) / 1000).toFixed(1);
-    console.log(`User creation completed in ${createDuration}s`);
+    logger.logInfo('User creation completed', { duration: `${createDuration}s` });
 
     // Add all AD users to the Rill group (idempotent operation) with rate limiting
-    console.log(
-      `Adding ${normalizedAdUsers.length} users to Rill group: ${config.rillGroupName}`
-    );
+    logger.logInfo('Adding users to Rill group', { 
+      count: normalizedAdUsers.length,
+      rillGroupName: config.rillGroupName 
+    });
     const addStartTime = Date.now();
     for (let i = 0; i < normalizedAdUsers.length; i++) {
       const email = normalizedAdUsers[i];
-      const progress = `[${i + 1}/${normalizedAdUsers.length}]`;
       try {
         await rillClient.addUserToGroup(email, config.rillGroupName);
         // Only count if it was a new addition (not already in group)
         if (!rillGroupUsersSet.has(email)) {
           result.usersAddedToGroup++;
-          console.log(`${progress} ✓ Added user ${email} to group`);
+          logger.logInfo('Added user to group', { 
+            email, 
+            progress: `${i + 1}/${normalizedAdUsers.length}` 
+          });
         } else {
           // Only log every 10th user to reduce log noise for large groups
           if ((i + 1) % 10 === 0 || normalizedAdUsers.length < 20) {
-            console.log(`${progress} - User ${email} already in group, skipped`);
+            logger.logDebug('User already in group, skipped', { 
+              email, 
+              progress: `${i + 1}/${normalizedAdUsers.length}` 
+            });
           }
         }
       } catch (error) {
         const errorMsg = `Failed to add user ${email} to group: ${error instanceof Error ? error.message : 'Unknown error'}`;
-        console.error(`${progress} ✗ ${errorMsg}`);
+        logger.logError('Failed to add user to group', error, { 
+          email, 
+          progress: `${i + 1}/${normalizedAdUsers.length}` 
+        });
         result.errors.push(errorMsg);
         // Don't mark as failure if it's just "already" - that's expected
         if (!errorMsg.includes('already')) {
@@ -187,18 +202,21 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     const addDuration = ((Date.now() - addStartTime) / 1000).toFixed(1);
-    console.log(`Group addition completed in ${addDuration}s`);
+    logger.logInfo('Group addition completed', { duration: `${addDuration}s` });
 
     const totalDuration = ((Date.now() - syncStartTime) / 1000).toFixed(1);
-    console.log(`Sync completed in ${totalDuration}s`);
-    console.log(`Summary: ${result.usersCreated} users created, ${result.usersAddedToGroup} users added to group`);
+    logger.logInfo('Sync completed', {
+      duration: `${totalDuration}s`,
+      usersCreated: result.usersCreated,
+      usersAddedToGroup: result.usersAddedToGroup,
+      errorCount: result.errors.length,
+    });
+    
     if (result.errors.length > 0) {
-      console.log(`Errors encountered: ${result.errors.length}`);
-      // Only show first 5 errors to avoid log spam
-      result.errors.slice(0, 5).forEach((err) => console.error(`  - ${err}`));
-      if (result.errors.length > 5) {
-        console.error(`  ... and ${result.errors.length - 5} more errors`);
-      }
+      logger.logWarning('Sync completed with errors', {
+        errorCount: result.errors.length,
+        errors: result.errors.slice(0, 5), // Log first 5 errors
+      });
     }
     // Consider it successful if we made progress, even if some operations failed
     if (result.usersCreated > 0 || result.usersAddedToGroup > 0) {
@@ -208,7 +226,10 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     return result;
   } catch (error) {
     const errorMsg = `Sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
-    console.error(errorMsg);
+    logger.logError('Sync failed', error, {
+      usersCreated: result.usersCreated,
+      usersAddedToGroup: result.usersAddedToGroup,
+    });
     result.success = false;
     result.errors.push(errorMsg);
     return result;
@@ -219,7 +240,10 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
  * Cloud Function HTTP handler
  */
 export async function syncUsers(req: Request, res: Response): Promise<void> {
-  console.log('Sync function triggered');
+  logger.logInfo('Sync function triggered', {
+    method: req.method,
+    path: req.path,
+  });
 
   try {
     // Validate environment variables
@@ -247,7 +271,7 @@ export async function syncUsers(req: Request, res: Response): Promise<void> {
       });
     }
   } catch (error) {
-    console.error('Function error:', error);
+    logger.logError('Function error', error);
     res.status(500).json({
       success: false,
       message: 'Sync failed',
