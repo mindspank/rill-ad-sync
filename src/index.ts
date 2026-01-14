@@ -188,8 +188,8 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     const addDuration = ((Date.now() - addStartTime) / 1000).toFixed(1);
     console.log(`Group addition completed in ${addDuration}s`);
 
-    const totalDuration = ((Date.now() - Date.now() + (Date.now() - addStartTime) + (Date.now() - startTime)) / 1000).toFixed(1);
-    console.log('Sync completed');
+    const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`Sync completed in ${totalDuration}s`);
     console.log(`Summary: ${result.usersCreated} users created, ${result.usersAddedToGroup} users added to group`);
     if (result.errors.length > 0) {
       console.log(`Errors encountered: ${result.errors.length}`);
