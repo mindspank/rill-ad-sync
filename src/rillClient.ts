@@ -17,11 +17,24 @@ export class RillClient {
   }
 
   /**
+   * Escape shell arguments to prevent command injection
+   */
+  private escapeShellArg(arg: string): string {
+    // Remove any characters that could be used for command injection
+    if (!/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(arg)) {
+      throw new Error(`Invalid input format: ${arg}`);
+    }
+    // For email addresses, we can be more permissive but still escape quotes
+    return `"${arg.replace(/"/g, '\\"')}"`;
+  }
+
+  /**
    * Execute a Rill CLI command and return the result
    */
   private async executeCommand(
     command: string,
-    ignoreErrors = false
+    ignoreErrors = false,
+    timeout = 30000
   ): Promise<string> {
     const fullCommand = `rill ${command} --api-token ${this.apiToken} --format json`;
     
@@ -32,6 +45,7 @@ export class RillClient {
           RILL_API_TOKEN: this.apiToken,
         },
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        timeout,
       });
 
       if (stderr && !ignoreErrors) {
@@ -44,6 +58,9 @@ export class RillClient {
         return '';
       }
       const errorMessage = error.stderr || error.message || 'Unknown error';
+      if (error.code === 'ETIMEDOUT' || error.killed) {
+        throw new Error(`Rill CLI command timed out: ${errorMessage}`);
+      }
       throw new Error(`Rill CLI command failed: ${errorMessage}`);
     }
   }
@@ -52,42 +69,46 @@ export class RillClient {
    * List all users in a Rill group
    */
   async listGroupMembers(groupName: string): Promise<string[]> {
+    if (!groupName || groupName.trim().length === 0) {
+      throw new Error('Group name cannot be empty');
+    }
+
     try {
+      const escapedGroupName = this.escapeShellArg(groupName.trim());
       const output = await this.executeCommand(
-        `user list --group "${groupName}"`,
-        true // Ignore errors in case group doesn't exist or is empty
+        `user list --group ${escapedGroupName}`,
+        false // Don't ignore errors - we need to know if group doesn't exist
       );
 
-      if (!output) {
+      if (!output || output.trim().length === 0) {
         return [];
       }
 
       const data = JSON.parse(output);
       
-      // Handle different possible response formats
+      // Handle different possible response formats and normalize emails
+      let emails: string[] = [];
+      
       if (Array.isArray(data)) {
-        return data
-          .map((user: any) => user.email || user.userPrincipalName)
-          .filter((email: string | undefined): email is string => !!email);
+        emails = data.map((user: any) => user.email || user.userPrincipalName);
+      } else if (data.users && Array.isArray(data.users)) {
+        emails = data.users.map((user: any) => user.email || user.userPrincipalName);
+      } else if (data.members && Array.isArray(data.members)) {
+        emails = data.members.map((user: any) => user.email || user.userPrincipalName);
       }
 
-      if (data.users && Array.isArray(data.users)) {
-        return data.users
-          .map((user: any) => user.email || user.userPrincipalName)
-          .filter((email: string | undefined): email is string => !!email);
+      // Normalize to lowercase and validate
+      return emails
+        .filter((email: any): email is string => !!email && typeof email === 'string')
+        .map((email: string) => email.toLowerCase().trim())
+        .filter((email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+    } catch (error: any) {
+      // If group doesn't exist, that's a real error we should surface
+      if (error.message && error.message.includes('not found')) {
+        throw new Error(`Rill group "${groupName}" does not exist`);
       }
-
-      if (data.members && Array.isArray(data.members)) {
-        return data.members
-          .map((user: any) => user.email || user.userPrincipalName)
-          .filter((email: string | undefined): email is string => !!email);
-      }
-
-      return [];
-    } catch (error) {
       console.error(`Error listing group members for "${groupName}":`, error);
-      // Return empty array on error to allow sync to continue
-      return [];
+      throw error; // Re-throw to surface the issue
     }
   }
 
@@ -95,8 +116,18 @@ export class RillClient {
    * Create a new user in Rill with the specified role
    */
   async createUser(email: string, role: string = 'viewer'): Promise<void> {
+    if (!email || !this.isValidEmail(email)) {
+      throw new Error(`Invalid email address: ${email}`);
+    }
+
+    const validRoles = ['viewer', 'editor', 'admin'];
+    if (!validRoles.includes(role.toLowerCase())) {
+      throw new Error(`Invalid role: ${role}. Must be one of: ${validRoles.join(', ')}`);
+    }
+
     try {
-      await this.executeCommand(`user add --email "${email}" --role ${role}`);
+      const escapedEmail = this.escapeShellArg(email.toLowerCase().trim());
+      await this.executeCommand(`user add --email ${escapedEmail} --role ${role.toLowerCase()}`);
       console.log(`Created user: ${email} with role: ${role}`);
     } catch (error: any) {
       // Check if user already exists
@@ -116,12 +147,28 @@ export class RillClient {
   }
 
   /**
+   * Validate email format
+   */
+  private isValidEmail(email: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+
+  /**
    * Add a user to a Rill group
    */
   async addUserToGroup(email: string, groupName: string): Promise<void> {
+    if (!email || !this.isValidEmail(email)) {
+      throw new Error(`Invalid email address: ${email}`);
+    }
+    if (!groupName || groupName.trim().length === 0) {
+      throw new Error('Group name cannot be empty');
+    }
+
     try {
+      const escapedEmail = this.escapeShellArg(email.toLowerCase().trim());
+      const escapedGroupName = this.escapeShellArg(groupName.trim());
       await this.executeCommand(
-        `usergroup add-user --group "${groupName}" --user "${email}"`
+        `usergroup add-user --group ${escapedGroupName} --user ${escapedEmail}`
       );
       console.log(`Added user ${email} to group ${groupName}`);
     } catch (error: any) {
@@ -140,22 +187,6 @@ export class RillClient {
       throw new Error(
         `Failed to add user ${email} to group ${groupName}: ${error.message || 'Unknown error'}`
       );
-    }
-  }
-
-  /**
-   * Check if a user exists in Rill (by checking if they're in any group or org)
-   */
-  async userExists(email: string): Promise<boolean> {
-    try {
-      // Try to list users - if the user exists, we might be able to find them
-      // This is a best-effort check since Rill CLI might not have a direct "user exists" command
-      await this.executeCommand(`user list`, true);
-      // If command succeeds, we can't definitively say if user exists
-      // We'll rely on createUser to handle "already exists" errors
-      return false;
-    } catch (error) {
-      return false;
     }
   }
 }

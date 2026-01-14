@@ -32,13 +32,25 @@ export class AdClient {
   }
 
   /**
+   * Escape single quotes in OData filter strings
+   */
+  private escapeODataString(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  /**
    * Resolve a group name to its ID
    */
   async getGroupId(groupName: string): Promise<string> {
+    if (!groupName || groupName.trim().length === 0) {
+      throw new Error('Group name cannot be empty');
+    }
+
     try {
+      const escapedGroupName = this.escapeODataString(groupName.trim());
       const response = await this.client
         .api('/groups')
-        .filter(`displayName eq '${groupName}'`)
+        .filter(`displayName eq '${escapedGroupName}'`)
         .get();
 
       const groups: GraphApiResponse<GraphApiGroup> = response;
@@ -85,10 +97,10 @@ export class AdClient {
             (item.userPrincipalName || item.mail)
         );
 
-        // Extract email addresses
+        // Extract email addresses (normalize to lowercase for consistent comparison)
         for (const user of users) {
-          const email = user.userPrincipalName || user.mail;
-          if (email && !userEmails.includes(email)) {
+          const email = (user.userPrincipalName || user.mail)?.toLowerCase().trim();
+          if (email && this.isValidEmail(email) && !userEmails.includes(email)) {
             userEmails.push(email);
           }
         }
@@ -103,6 +115,14 @@ export class AdClient {
         `Failed to fetch group members: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Validate email format
+   */
+  private isValidEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
   }
 
   /**

@@ -67,24 +67,37 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     const adUsers = await adClient.getUsersInGroup(config.adGroupName);
     console.log(`Found ${adUsers.length} users in AD group`);
 
+    // Normalize AD users to lowercase for consistent comparison
+    const normalizedAdUsers = adUsers.map((email) => email.toLowerCase().trim());
+
     // Fetch users from Rill group
     console.log(`Fetching users from Rill group: ${config.rillGroupName}`);
-    const rillGroupUsers = await rillClient.listGroupMembers(
-      config.rillGroupName
-    );
-    console.log(`Found ${rillGroupUsers.length} users in Rill group`);
+    let rillGroupUsers: string[] = [];
+    try {
+      rillGroupUsers = await rillClient.listGroupMembers(config.rillGroupName);
+      console.log(`Found ${rillGroupUsers.length} users in Rill group`);
+    } catch (error: any) {
+      // If group doesn't exist, that's a critical error
+      if (error.message && error.message.includes('does not exist')) {
+        throw new Error(
+          `Rill group "${config.rillGroupName}" does not exist. Please create it first.`
+        );
+      }
+      throw error;
+    }
 
-    // Find users in AD but not in Rill
-    const usersToCreate = adUsers.filter(
-      (email) => !rillGroupUsers.includes(email)
+    // Use Set for O(1) lookups instead of O(n) includes()
+    const rillGroupUsersSet = new Set(rillGroupUsers.map((email) => email.toLowerCase().trim()));
+
+    // Find users in AD but not in Rill group (these need to be created and added)
+    const usersToCreate = normalizedAdUsers.filter(
+      (email) => !rillGroupUsersSet.has(email)
     );
 
-    // Find users in both AD and Rill but not in the Rill group
-    // Note: We only know about users in the group, so we'll try to add all AD users
-    // and let the Rill CLI handle "already in group" errors gracefully
-    const usersToAddToGroup = adUsers.filter(
-      (email) => !rillGroupUsers.includes(email)
-    );
+    // Find users that are in Rill but not in the group (these just need to be added)
+    // Note: We can't easily determine this without listing all Rill users,
+    // so we'll try to add all AD users and let Rill CLI handle "already in group" gracefully
+    const usersToAddToGroup = normalizedAdUsers;
 
     // Create new users in Rill
     console.log(`Creating ${usersToCreate.length} new users in Rill`);
@@ -102,13 +115,13 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
 
     // Add all AD users to the Rill group (idempotent operation)
     console.log(
-      `Adding ${adUsers.length} users to Rill group: ${config.rillGroupName}`
+      `Adding ${normalizedAdUsers.length} users to Rill group: ${config.rillGroupName}`
     );
-    for (const email of adUsers) {
+    for (const email of normalizedAdUsers) {
       try {
         await rillClient.addUserToGroup(email, config.rillGroupName);
         // Only count if it was a new addition (not already in group)
-        if (usersToAddToGroup.includes(email)) {
+        if (!rillGroupUsersSet.has(email)) {
           result.usersAddedToGroup++;
         }
       } catch (error) {
