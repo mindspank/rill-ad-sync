@@ -6,6 +6,7 @@ import { ClientSecretCredential } from '@azure/identity';
 import { Client } from '@microsoft/microsoft-graph-client';
 import { TokenCredentialAuthenticationProvider } from '@microsoft/microsoft-graph-client/authProviders/azureTokenCredentials';
 import { GraphApiGroup, GraphApiResponse, GraphApiUser } from './types';
+import * as logger from './logger';
 
 export class AdClient {
   private client: Client;
@@ -62,14 +63,16 @@ export class AdClient {
       }
 
       if (groups.value.length > 1) {
-        console.warn(
-          `Multiple groups found with name "${groupName}", using first one: ${groups.value[0].id}`
-        );
+        logger.logWarning('Multiple groups found with same name, using first one', {
+          groupName,
+          groupId: groups.value[0].id,
+          totalMatches: groups.value.length,
+        });
       }
 
       return groups.value[0].id;
     } catch (error) {
-      console.error('Error resolving group name to ID:', error);
+      logger.logError('Error resolving group name to ID', error, { groupName });
       throw new Error(
         `Failed to resolve group name "${groupName}" to ID: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
@@ -101,7 +104,11 @@ export class AdClient {
         }
         if (attempt < maxRetries - 1) {
           const delay = baseDelay * Math.pow(2, attempt);
-          console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+          logger.logWarning('Retrying operation', {
+            attempt: attempt + 1,
+            maxRetries,
+            delayMs: delay,
+          });
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -147,7 +154,7 @@ export class AdClient {
 
       return Array.from(userEmailsSet);
     } catch (error) {
-      console.error('Error fetching group members:', error);
+      logger.logError('Error fetching group members', error, { groupId });
       throw new Error(
         `Failed to fetch group members: ${error instanceof Error ? error.message : 'Unknown error'}`
       );

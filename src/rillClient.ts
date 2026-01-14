@@ -4,6 +4,7 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import * as logger from './logger';
 
 const execAsync = promisify(exec);
 
@@ -63,7 +64,12 @@ export class RillClient {
           const delay = isRateLimit 
             ? baseDelay * Math.pow(2, attempt + 2) // Longer backoff for rate limits
             : baseDelay * Math.pow(2, attempt);
-          console.warn(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms${isRateLimit ? ' (rate limited)' : ''}`);
+          logger.logWarning('Retrying Rill CLI command', {
+            attempt: attempt + 1,
+            maxRetries,
+            delayMs: delay,
+            isRateLimited: isRateLimit,
+          });
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
       }
@@ -110,7 +116,7 @@ export class RillClient {
       });
 
       if (stderr && !ignoreErrors) {
-        console.warn(`Rill CLI stderr: ${stderr}`);
+        logger.logWarning('Rill CLI stderr output', { stderr, command });
       }
 
       return stdout.trim();
@@ -168,7 +174,7 @@ export class RillClient {
       if (error.message && error.message.includes('not found')) {
         throw new Error(`Rill group "${groupName}" does not exist`);
       }
-      console.error(`Error listing group members for "${groupName}":`, error);
+      logger.logError('Error listing group members', error, { groupName });
       throw error; // Re-throw to surface the issue
     }
   }
@@ -189,7 +195,7 @@ export class RillClient {
     try {
       const escapedEmail = this.escapeShellArg(email.toLowerCase().trim());
       await this.executeCommand(`user add --email ${escapedEmail} --role ${role.toLowerCase()}`);
-      console.log(`Created user: ${email} with role: ${role}`);
+      logger.logInfo('Created user in Rill', { email, role });
     } catch (error: any) {
       // Check if user already exists
       if (
@@ -198,7 +204,7 @@ export class RillClient {
           error.message.includes('duplicate') ||
           error.message.includes('409'))
       ) {
-        console.log(`User ${email} already exists, skipping creation`);
+        logger.logInfo('User already exists, skipping creation', { email });
         return;
       }
       throw new Error(
@@ -231,7 +237,7 @@ export class RillClient {
       await this.executeCommand(
         `usergroup add-user --group ${escapedGroupName} --user ${escapedEmail}`
       );
-      console.log(`Added user ${email} to group ${groupName}`);
+      logger.logInfo('Added user to Rill group', { email, groupName });
     } catch (error: any) {
       // Check if user is already in group
       if (
@@ -240,9 +246,7 @@ export class RillClient {
           error.message.includes('member') ||
           error.message.includes('409'))
       ) {
-        console.log(
-          `User ${email} is already in group ${groupName}, skipping`
-        );
+        logger.logInfo('User already in group, skipping', { email, groupName });
         return;
       }
       throw new Error(
