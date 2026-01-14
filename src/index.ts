@@ -128,7 +128,8 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
 
     // Create new users in Rill with rate limiting (sequential to avoid overwhelming the API)
     console.log(`Creating ${usersToCreate.length} new users in Rill`);
-    const startTime = Date.now();
+    const syncStartTime = Date.now();
+    const createStartTime = Date.now();
     for (let i = 0; i < usersToCreate.length; i++) {
       const email = usersToCreate[i];
       const progress = `[${i + 1}/${usersToCreate.length}]`;
@@ -149,7 +150,7 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
       // Small delay to avoid rate limiting (50ms between requests)
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    const createDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+    const createDuration = ((Date.now() - createStartTime) / 1000).toFixed(1);
     console.log(`User creation completed in ${createDuration}s`);
 
     // Add all AD users to the Rill group (idempotent operation) with rate limiting
@@ -188,7 +189,7 @@ async function performSync(config: EnvConfig): Promise<SyncResult> {
     const addDuration = ((Date.now() - addStartTime) / 1000).toFixed(1);
     console.log(`Group addition completed in ${addDuration}s`);
 
-    const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+    const totalDuration = ((Date.now() - syncStartTime) / 1000).toFixed(1);
     console.log(`Sync completed in ${totalDuration}s`);
     console.log(`Summary: ${result.usersCreated} users created, ${result.usersAddedToGroup} users added to group`);
     if (result.errors.length > 0) {
