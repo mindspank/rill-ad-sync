@@ -9,11 +9,9 @@ const execAsync = promisify(exec);
 
 export class RillClient {
   private apiToken: string;
-  private orgName?: string;
 
   constructor(apiToken: string, orgName?: string) {
     this.apiToken = apiToken;
-    this.orgName = orgName;
   }
 
   /**
